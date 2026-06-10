@@ -82,7 +82,7 @@ Set a byte limit to `0` only when a project deliberately accepts unbounded evide
 
 DocGraph is one shared system graph with role-aware retrieval. Nodes, edges, and claims can include `visibility`, `finder_role`, `audience_roles`, and `interface_tags`. This prevents important facts discovered by one role from staying trapped in that role.
 
-Use `dg_related_context_check` before classifying a finding as local when it touches configuration, registers, timing/vsync, channels, data path, interrupts/status, build/generated files, tests, debug, or runbooks.
+Use small `dg_search` and `dg_context` checks before classifying a finding as local when it touches configuration, registers, timing/vsync, channels, data path, interrupts/status, build/generated files, tests, debug, or runbooks.
 
 Visibility values:
 

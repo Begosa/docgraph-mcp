@@ -86,11 +86,11 @@ stale/conflict warnings
 suggested next checks
 ```
 
-## Related-context check
+## Related Context Checks
 
-`dg_related_context_check` performs a bounded check before the curator marks a finding local.
+Use `dg_search` and small-budget `dg_context` before the curator marks a finding local.
 
-It searches the finding and interface tags, prefers high-level nodes, and returns candidate flows/features/concepts/interfaces/runbooks. It does not create edges or claims.
+Search exact/new entity names first, then search a small set of interface/lifecycle terms from the finding. Prefer high-level flows/features/concepts/interfaces/runbooks as context anchors. Retrieval does not create edges or claims.
 
 Important rule:
 

@@ -2138,9 +2138,18 @@ class DocGraphBackend:
         self._log("info", "render_docs.done", **result, elapsed_ms=(time.perf_counter() - started) * 1000)
         return result
 
-    def stale_scan(self, auto_ingest: bool = False) -> dict[str, Any]:
+    def stale_scan(
+        self,
+        auto_ingest: bool = False,
+        source_id: str | None = None,
+        uri: str | None = None,
+        max_sources: int = 20,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
-        self._log("info", "stale_scan.start", auto_ingest=auto_ingest)
+        self._log("info", "stale_scan.start", auto_ingest=auto_ingest, source_id=source_id, uri=uri, max_sources=max_sources)
+        if source_id and uri:
+            raise ValueError("provide source_id or uri, not both")
+        max_sources = max(1, int(max_sources))
         changed = []
         missing = []
         ingested = []
@@ -2150,7 +2159,17 @@ class DocGraphBackend:
             self._log("info", "stale_scan.done", changed_count=0, missing_count=0, auto_ingested_count=0, reason="no file-backed source types configured", elapsed_ms=(time.perf_counter() - started) * 1000)
             return result
         marks = ",".join("?" for _ in file_types)
-        for s in self.conn.execute(f"SELECT * FROM sources WHERE source_type IN ({marks})", file_types):
+        params: list[Any] = list(file_types)
+        where = [f"source_type IN ({marks})"]
+        if source_id:
+            where.append("source_id=?")
+            params.append(source_id)
+        if uri:
+            where.append("uri=?")
+            params.append(uri)
+        query = f"SELECT * FROM sources WHERE {' AND '.join(where)} ORDER BY uri"
+        auto_ingest_candidates = 0
+        for s in self.conn.execute(query, params):
             uri = s["uri"]
             try:
                 content = self._safe_read_uri(uri)
@@ -2163,6 +2182,12 @@ class DocGraphBackend:
             if h != s["current_hash"]:
                 changed.append({"source_id": s["source_id"], "uri": uri, "old_hash": s["current_hash"], "new_hash": h})
                 if auto_ingest:
+                    auto_ingest_candidates += 1
+                    if auto_ingest_candidates > max_sources:
+                        raise ValueError(
+                            f"refusing stale_scan auto_ingest for more than {max_sources} changed sources; "
+                            "rerun with source_id/uri filter or increase max_sources deliberately"
+                        )
                     ingested.append(self.ingest_source(s["source_type"], uri, episode_type="snapshot", name=s["name"]))
         result = {"changed": changed, "missing": missing, "auto_ingested": ingested}
         self._log("info", "stale_scan.done", changed_count=len(changed), missing_count=len(missing), auto_ingested_count=len(ingested), elapsed_ms=(time.perf_counter() - started) * 1000)

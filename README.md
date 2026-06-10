@@ -26,7 +26,7 @@ docgraph_write  -> curator-only ingestion/proposal/commit/render tools
 Compatibility server:
 
 ```text
-docgraph_mcp.server -> all tools for local/manual debugging
+docgraph_mcp.server -> all tools for local/manual debugging; disabled unless DOCGRAPH_ENABLE_COMPAT_SERVER=1
 ```
 
 ## Tools
@@ -34,13 +34,10 @@ docgraph_mcp.server -> all tools for local/manual debugging
 Read tools:
 
 ```text
-dg_resolve
 dg_search
 dg_context
-dg_related_context_check
 dg_suggest_evidence_relinks
 dg_suggest_source_relinks
-dg_mutation_schema
 dg_validate
 ```
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any
 
 from .server_runtime import build_server_runtime
@@ -90,12 +92,19 @@ def dg_render_docs(output_dir: str | None = None) -> dict[str, Any]:
 
 
 @tool
-def dg_stale_scan(auto_ingest: bool = False) -> dict[str, Any]:
+def dg_stale_scan(auto_ingest: bool = False, source_id: str | None = None, uri: str | None = None, max_sources: int = 20) -> dict[str, Any]:
     """Detect changed/missing file-like sources and optionally re-ingest changed files."""
-    return get_backend().stale_scan(auto_ingest=auto_ingest)
+    return get_backend().stale_scan(auto_ingest=auto_ingest, source_id=source_id, uri=uri, max_sources=max_sources)
 
 
 def main() -> None:
+    if os.environ.get("DOCGRAPH_ENABLE_COMPAT_SERVER") != "1":
+        print(
+            "docgraph_mcp.server exposes read and write tools together and is disabled by default. "
+            "Use docgraph_mcp.read_server/docgraph_mcp.write_server, or set DOCGRAPH_ENABLE_COMPAT_SERVER=1 for manual debugging.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     runtime.run()
 
 
