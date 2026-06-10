@@ -152,3 +152,7 @@ tests/                  standalone backend/retrieval tests
 ## Status
 
 This repository is an extracted public core. Agent prompts, project-specific runbooks, private graph databases, and organization-specific configuration should live in a separate private repository that consumes this package or mounts it as a submodule.
+
+## License
+
+Apache-2.0.
