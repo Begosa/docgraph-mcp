@@ -1,0 +1,29 @@
+[project]
+name = "docgraph-mcp"
+version = "0.6.0"
+description = "Evidence-backed DocGraph MCP server for agent memory"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.0.0",
+  "PyYAML>=6.0"
+]
+
+[project.optional-dependencies]
+models = [
+  "sentence-transformers>=3.0.0"
+]
+sqlite = [
+  "pysqlite3-binary>=0.5.0"
+]
+gui = [
+  "PyQt6>=6.6.0"
+]
+
+[project.scripts]
+docgraph-mcp = "docgraph_mcp.server:main"
+docgraph-mcp-read = "docgraph_mcp.read_server:main"
+docgraph-mcp-write = "docgraph_mcp.write_server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

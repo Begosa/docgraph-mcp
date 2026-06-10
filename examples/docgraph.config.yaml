@@ -1,0 +1,293 @@
+logging:
+  enabled: true
+  level: info        # off | error | warning | info | debug | trace
+  file: docs/logs/docgraph-mcp.log      # log destination under DOCGRAPH_ROOT
+  max_bytes: 5000000                    # rotate file after this size
+  backup_count: 3                       # number of rotated files to keep
+  stderr: false                         # also mirror logs to stderr
+  include_payloads: false               # include full payloads in logs (can be noisy/sensitive)
+  payload_preview_chars: 500            # truncate payload fields when include_payloads=false
+
+# DocGraph project configuration.
+# MCP code should stay generic. Project-specific taxonomy, retrieval policy,
+# roles, budgets, and ranking weights live here.
+
+data_model:
+  claim_classes:                        # allowed claim.classification values
+    - Fact
+    - Inference
+    - Hypothesis
+    - OpenQuestion
+    - Contradiction
+  claim_statuses:                       # allowed lifecycle states for claims
+    - active
+    - needs_review
+    - stale
+    - superseded
+    - contradicted
+    - retired
+  evidence_roles:                       # how evidence relates to a claim
+    - supports
+    - refutes
+    - weakens
+    - historical_context
+
+shared_knowledge:
+  visibility_values: [local, shared, global, shared_candidate]  # allowed visibility labels
+  default_visibility: local                                      # fallback visibility when mutation omits it
+  high_level_node_types: [flow, feature, concept, interface, runbook]  # frame candidates for global mode
+  interface_tags: &shared_interface_tags
+    - config
+    - register
+    - timing
+    - vsync
+    - frame
+    - clock
+    - reset
+    - protocol
+    - power
+    - boot
+    - data_path
+    - channel_count
+    - interrupt
+    - status
+    - memory_layout
+    - generated_header
+    - build
+    - test
+    - simulation
+    - palladium
+    - seed
+    - waveform
+    - coverage
+    - debug
+    - runbook
+  cross_role_trigger_tags: *shared_interface_tags  # tags that trigger "likely shared/global" recommendations
+
+source_handling:
+  line_chunk_source_types: [code_file, rtl_file, build_file, log]  # chunk by lines for these source types
+  file_backed_source_types: [code_file, rtl_file, build_file, doc_file]  # stale-scan tracks only these
+  lines_per_chunk: 60                 # line chunk size
+  line_chunk_overlap: 5               # overlap between consecutive line chunks
+  paragraph_max_chars: 1600           # paragraph-group target size for doc-style sources
+  max_file_ingest_bytes: 1048576      # reject oversized file-backed snapshots; 0 disables
+  max_inline_content_bytes: 262144    # reject oversized inline external/archive snapshots; 0 disables
+  reject_inline_content_for_repo_files: true  # repo-local files must be ingested by uri only
+
+taxonomy:
+  node_types:                         # allowed node.node_type values
+    - block
+    - clock_domain
+    - reset_domain
+    - register
+    - field
+    - protocol_endpoint
+    - function
+    - file
+    - flow
+    - feature
+    - concept
+    - runbook
+    - interface
+    - test
+    - testbench
+    - build_target
+    - rtl_signal
+    - fw_symbol
+  relation_types:                     # allowed edge.relation values
+    - affects
+    - configures
+    - implements
+    - clocked_by
+    - reset_by
+    - mapped_to
+    - validated_in
+    - belongs_to
+    - part_of
+    - configured_during
+    - debugged_by
+    - reads
+    - writes
+    - calls
+    - depends_on
+    - produces
+    - consumes
+    - verifies
+    - documents
+
+retrieval:
+  default_mode: local                 # default context mode when caller does not pass mode
+  default_budget: small               # default node/claim/edge/evidence limits
+  include_stale_warnings: true        # include stale/needs_review warnings in context packets
+  max_extracted_terms: 12             # query term extraction cap for resolve/search
+  max_anchor_expansion: 20            # max anchor seeds for one-hop expansion in search
+  neighbor_edges_per_anchor: 8        # max neighbor edges sampled per expanded anchor
+  anchor_filter:
+    enabled: true                     # drop far-below-top anchors
+    relative_delta: 25                # keep anchors within (top_score - delta)
+    min_score: 0                      # absolute anchor score floor
+    min_anchors: 4                    # always keep at least this many anchors if available
+  modes:
+    local:
+      enabled: true                   # direct neighborhood only
+    global:
+      enabled: true                   # add high-level frames via upward traversal
+      max_depth: 3                    # max traversal depth for global framing
+    bridge:
+      enabled: true                   # add bounded paths between anchors
+      max_depth: 4                    # per-path edge depth cap
+      max_paths: 6                    # max bridge paths returned
+      max_anchors: 10                 # cap anchors considered for pairwise bridging
+    hybrid:
+      enabled: true                   # local + global + bridge
+    mix:
+      enabled: true                   # hybrid + semantic candidates (+ optional reranker)
+      semantic_anchor_promotion:
+        enabled: true                # master switch for semantic+lexical fusion in mix mode
+        top_semantic_results: 16     # semantic results window considered for promotion
+        max_promoted_anchors: 4      # hard cap on semantic-only anchors added
+        min_lexical_anchors: 3       # keep at least this many original lexical anchors
+        min_score: 0                 # absolute minimum semantic score to admit
+        relative_delta: 12           # also require score >= (top_semantic_score - relative_delta)
+        lexical_weight: 1.0          # RRF fusion weight for lexical ranking signal
+        semantic_weight: 1.2         # RRF fusion weight for semantic ranking signal
+        rrf_k: 60                    # RRF smoothing constant (higher => flatter rank impact)
+        require_graph_coherence: true  # with established lexical context, promote only connected semantic-only nodes
+        coherence_min_lexical_anchors: 2  # below this count, permit semantic discovery to recover missing context
+        coherence_max_depth: 2       # fallback max active visible-edge path from semantic node to a lexical anchor
+        coherence_max_depth_by_budget: {small: 2, medium: 2, large: 3}  # larger budget allows broader graph-coherent recall
+  global_scope:
+    preferred_node_types: [flow, feature, concept, interface, runbook]  # eligible high-level frame nodes
+    upward_relations: [belongs_to, part_of, depends_on, affects, configured_during]  # edges followed upward
+  bridge_scope:
+    preferred_relations: [belongs_to, part_of, configured_during, configures, affects, depends_on, implements, writes, reads, calls]  # path-priority relations
+  budgets:
+    small:
+      nodes: 5                       # selected anchors in context packet
+      claims: 4                      # local claim fetch limit per anchor
+      edges: 8                       # local edge fetch limit per anchor
+      evidence: 2                    # evidence refs per claim
+    medium:
+      nodes: 10
+      claims: 8
+      edges: 16
+      evidence: 3
+    large:
+      nodes: 20
+      claims: 16
+      edges: 32
+      evidence: 5
+  ranking:
+    # Retrieval scoring weights/bonuses. Tune comparatively; absolute scale is less important.
+    exact_alias: 100
+    exact_node: 95
+    fts_alias: 60
+    node_fts: 55
+    edge_fts: 52
+    resolved_node_bonus: 20
+    claim_fts: 70
+    chunk_fts: 45
+    edge_expansion: 35
+    claim_target_anchor_bonus: -3
+    edge_endpoint_anchor_bonus: -4
+    chunk_target_anchor_bonus: -6
+    expanded_anchor_step_bonus: -8
+    role_preferred_node_bonus: 8
+    role_preferred_relation_bonus: 6
+    role_audience_match_bonus: 12
+    shared_visibility_bonus: 7
+    global_visibility_bonus: 9
+    shared_candidate_bonus: 3
+    local_cross_role_penalty: -100
+    global_frame_bonus: 18
+    bridge_path_base: 80
+    bridge_path_step_penalty: -8
+    generic_node_degree_penalty: -2
+    semantic_candidate: 55
+
+retrieval_models:
+  embeddings:
+    enabled: false                   # enable semantic retrieval pipeline
+    provider: sentence_transformers  # sentence_transformers | http
+    model: BAAI/bge-large-en-v1.5    # model id or local path
+    preload_on_boot: true            # warm provider at backend startup (local paths only)
+    incremental_cache_enabled: true  # persist candidate vectors in embedding_items
+    normalize: true                  # normalize output vectors before cosine scoring
+    query_instruction: "Represent this sentence for searching relevant passages: "  # query prefix for ST models
+    max_in_memory_items: 200         # semantic candidate materialization cap (nodes+claims+edges)
+    top_k: 12                        # semantic results retained in context packet
+  reranker:
+    enabled: false                   # rerank semantic candidate subset
+    provider: sentence_transformers_cross_encoder  # cross-encoder provider
+    model: models/Qwen--Qwen3-Reranker-0.6B  # local path or model id, e.g. Qwen/Qwen3-Reranker-0.6B
+    preload_on_boot: false            # warm reranker provider at backend startup
+    top_k_input: 40                   # semantic candidates passed to reranker
+    top_k_output: 12                  # top reranked items retained
+    min_relevance_score: 0.0          # candidates below this LLM/cross score are deprioritized
+  llm_reranker:
+    enabled: false                   # optional second-stage LLM relevance rescue reranker
+    provider: http_chat              # OpenAI-compatible chat reranker
+    base_url_env: DOCGRAPH_LLM_BASE_URL
+    api_key_env: DOCGRAPH_LLM_TOKEN
+    models_endpoint: /v1/models
+    chat_endpoint: /v1/chat/completions
+    preferred_models: []             # first available model id from this list is selected
+    model: ""                         # optional fixed model override; skips dynamic selection when set
+    model_cache_ttl_seconds: 300
+    timeout_seconds: 45
+    temperature: 0.0
+    max_candidate_chars: 400
+    top_k_input: 12
+    top_k_output: 6
+    min_relevance_score: 0.0
+    tool_name: submit_rerank_scores    # forced function/tool name for structured scores
+    trigger: rescue_only             # always | rescue_only | disabled
+    rescue:
+      max_lexical_anchors: 2         # run LLM stage when lexical anchors are sparse
+      min_top_score: 0.0             # run when top post-cross-encoder score is below this (>0 to enable)
+      min_embedding_top_score: 0.0   # run when cross-encoder skipped and embedding top score is below this
+
+roles:
+  firmware:
+    include_visibility: [shared, global, shared_candidate]  # role-visible non-local scopes
+    preferred_node_types: [function, file, register, field, flow, fw_symbol]  # ranking affinity
+    preferred_relations: [configures, writes, reads, calls, affects, implements]  # ranking affinity
+    suggested_checks:
+      - Inspect the current FW configuration/write path for selected anchors.
+      - Verify active mode/configuration before assuming RTL behavior.
+  rtl:
+    include_visibility: [shared, global, shared_candidate]
+    preferred_node_types: [block, interface, rtl_signal, register, field, flow]
+    preferred_relations: [implements, affects, depends_on, produces, consumes]
+    suggested_checks:
+      - Inspect producer/consumer RTL path around selected anchors.
+      - Check reset, clock, handshake, and interface assumptions.
+  build:
+    include_visibility: [shared, global, shared_candidate]
+    preferred_node_types: [build_target, file, function, concept]
+    preferred_relations: [depends_on, implements, documents]
+    suggested_checks:
+      - Inspect the active build target, flags, generated files, and dependency path.
+  test_debug:
+    include_visibility: [shared, global, shared_candidate]
+    preferred_node_types: [test, runbook, function, file, concept]
+    preferred_relations: [verifies, debugged_by, depends_on, calls]
+    suggested_checks:
+      - Compare active evidence against current logs/test reproduction before concluding.
+  architecture:
+    include_visibility: [shared, global, shared_candidate]
+    preferred_node_types: [flow, feature, concept, block, interface, runbook]
+    preferred_relations: [affects, depends_on, belongs_to, documents]
+    suggested_checks:
+      - Separate durable architecture facts from local implementation observations.
+
+intents:
+  debug:
+    suggested_checks:
+      - Verify selected anchors against current reproduction evidence before concluding.
+  implementation:
+    suggested_checks:
+      - Verify ownership and existing implementation path before changing code.
+  architecture:
+    suggested_checks:
+      - Check whether claims are facts, inferences, or open questions before treating them as architecture.
