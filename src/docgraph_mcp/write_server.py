@@ -65,9 +65,9 @@ def dg_ingest_investigation_report(
 
 
 @tool
-def dg_mutation_schema() -> dict[str, Any]:
-    """Return the canonical proposal mutation schema, aliases, examples, and visibility contract."""
-    return get_backend().mutation_schema()
+def dg_mutation_schema(detail: str = "compact") -> dict[str, Any]:
+    """Return the proposal mutation schema. detail: compact/full."""
+    return get_backend().mutation_schema(detail=detail)
 
 
 @tool
@@ -77,15 +77,15 @@ def dg_propose_update(reason: str, mutations: list[dict[str, Any]], created_by: 
 
 
 @tool
-def dg_commit_update(proposal_id: str) -> dict[str, Any]:
+def dg_commit_update(proposal_id: str, error_limit: int = 20) -> dict[str, Any]:
     """Validate and atomically commit a pending proposal."""
-    return get_backend().commit_update(proposal_id=proposal_id)
+    return get_backend().commit_update(proposal_id=proposal_id, error_limit=error_limit)
 
 
 @tool
-def dg_validate() -> dict[str, Any]:
+def dg_validate(limit: int = 20, detail: str = "compact") -> dict[str, Any]:
     """Validate graph integrity and claim evidence rules."""
-    return get_backend().validate()
+    return get_backend().validate(limit=limit, detail=detail)
 
 
 @tool
@@ -95,9 +95,23 @@ def dg_render_docs(output_dir: str | None = None) -> dict[str, Any]:
 
 
 @tool
-def dg_stale_scan(auto_ingest: bool = False, source_id: str | None = None, uri: str | None = None, max_sources: int = 20) -> dict[str, Any]:
+def dg_stale_scan(
+    auto_ingest: bool = False,
+    source_id: str | None = None,
+    uri: str | None = None,
+    max_sources: int = 20,
+    result_limit: int = 50,
+    detail: str = "compact",
+) -> dict[str, Any]:
     """Detect changed/missing file-like sources and optionally re-ingest a bounded filtered set."""
-    return get_backend().stale_scan(auto_ingest=auto_ingest, source_id=source_id, uri=uri, max_sources=max_sources)
+    return get_backend().stale_scan(
+        auto_ingest=auto_ingest,
+        source_id=source_id,
+        uri=uri,
+        max_sources=max_sources,
+        result_limit=result_limit,
+        detail=detail,
+    )
 
 
 def main() -> None:

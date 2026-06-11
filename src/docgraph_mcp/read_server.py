@@ -42,9 +42,9 @@ def dg_suggest_source_relinks(source_id: str | None = None, uri: str | None = No
 
 
 @tool
-def dg_validate() -> dict[str, Any]:
+def dg_validate(limit: int = 20, detail: str = "compact") -> dict[str, Any]:
     """Validate graph integrity and claim evidence rules."""
-    return get_backend().validate()
+    return get_backend().validate(limit=limit, detail=detail)
 
 
 def main() -> None:

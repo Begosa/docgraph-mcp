@@ -1813,14 +1813,14 @@ class DocGraphBackend:
 
     # ---------- mutation flow ----------
 
-    def mutation_schema(self) -> dict[str, Any]:
+    def mutation_schema(self, detail: str = "compact") -> dict[str, Any]:
         """Return the exact mutation contract accepted by propose/commit.
 
         Agents often guess operation names such as ``upsert_edge`` or ``node``.
         The backend normalizes common aliases, but this schema is the canonical
         contract the curator should follow.
         """
-        return {
+        schema = {
             "canonical_ops": sorted(CANONICAL_MUTATION_OPS),
             "op_aliases": dict(sorted(MUTATION_OP_ALIASES.items())),
             "taxonomy_contract": {
@@ -1896,6 +1896,36 @@ class DocGraphBackend:
                 },
             },
         }
+        if detail == "full":
+            return schema
+        if detail != "compact":
+            raise ValueError("detail must be 'compact' or 'full'")
+        compact_ops = {
+            name: {
+                "required": spec["required"],
+                "optional": spec.get("optional", []),
+                **({"aliases": spec["aliases"]} if spec.get("aliases") else {}),
+            }
+            for name, spec in schema["ops"].items()
+        }
+        return {
+            "detail": "compact",
+            "canonical_ops": schema["canonical_ops"],
+            "op_aliases": schema["op_aliases"],
+            "taxonomy_contract": schema["taxonomy_contract"],
+            "visibility_contract": {
+                "visibility_values": schema["visibility_contract"]["visibility_values"],
+                "roles": schema["visibility_contract"]["roles"],
+                "interface_tags": schema["visibility_contract"]["interface_tags"],
+            },
+            "rules": [
+                "Use exact chunk_ids/chunk_refs returned by ingest tools; never infer chunk IDs.",
+                "Active Fact/Inference/Hypothesis/Contradiction claims require active supporting evidence.",
+                "Repository-local sources should be ingested by repo-relative uri with content omitted.",
+                "Use detail='full' for examples and expanded guidance.",
+            ],
+            "ops": compact_ops,
+        }
 
     def _normalize_mutations(self, mutations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Compatibility wrapper for mutation normalization and expansion."""
@@ -1933,7 +1963,7 @@ class DocGraphBackend:
         self._log(TRACE_LEVEL, "proposal.mutations", proposal_id=proposal_id, mutations=mutations)
         return result
 
-    def commit_update(self, proposal_id: str) -> dict[str, Any]:
+    def commit_update(self, proposal_id: str, error_limit: int = 20) -> dict[str, Any]:
         started = time.perf_counter()
         self._log("info", "commit.start", proposal_id=proposal_id)
         row = self.conn.execute("SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
@@ -1952,10 +1982,16 @@ class DocGraphBackend:
             with self.conn:
                 for m in mutations:
                     self._apply_mutation(m)
-                validation = self.validate()
+                validation = self.validate(limit=error_limit)
                 if validation["errors"]:
                     self._log("error", "commit.validation_failed", proposal_id=proposal_id, errors=validation["errors"])
-                    raise ValueError("validation failed: " + json.dumps(validation["errors"], indent=2))
+                    raise ValueError("validation failed: " + json.dumps({
+                        "error_count": validation.get("error_count", len(validation["errors"])),
+                        "warning_count": validation.get("warning_count", len(validation.get("warnings", []))),
+                        "errors": validation["errors"],
+                        "warnings": validation.get("warnings", []),
+                        "truncated": validation.get("truncated", False),
+                    }, indent=2))
                 after_rev = str(int(before_rev) + 1)
                 self.conn.execute("UPDATE metadata SET value=? WHERE key='graph_revision'", (after_rev,))
                 self.conn.execute(
@@ -2184,7 +2220,7 @@ class DocGraphBackend:
 
     # ---------- validation/render/stale ----------
 
-    def validate(self) -> dict[str, Any]:
+    def validate(self, limit: int = 20, detail: str = "compact") -> dict[str, Any]:
         started = time.perf_counter()
         self._log("debug", "validate.start")
         errors: list[dict[str, Any]] = []
@@ -2257,7 +2293,26 @@ class DocGraphBackend:
             """
         ):
             warnings.append({"type": "alias_collision_across_nodes", **dict(r)})
-        result = {"ok": not errors, "errors": errors, "warnings": warnings, "graph_revision": self._revision()}
+        if detail not in {"compact", "full"}:
+            raise ValueError("detail must be 'compact' or 'full'")
+        limit = max(1, int(limit))
+        error_count = len(errors)
+        warning_count = len(warnings)
+        if detail == "full":
+            visible_errors = errors
+            visible_warnings = warnings
+        else:
+            visible_errors = errors[:limit]
+            visible_warnings = warnings[:limit]
+        result = {
+            "ok": not errors,
+            "errors": visible_errors,
+            "warnings": visible_warnings,
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "truncated": detail != "full" and (error_count > len(visible_errors) or warning_count > len(visible_warnings)),
+            "graph_revision": self._revision(),
+        }
         self._log("info", "validate.done", ok=result["ok"], error_count=len(errors), warning_count=len(warnings), graph_revision=result["graph_revision"], elapsed_ms=(time.perf_counter() - started) * 1000)
         self._log(TRACE_LEVEL, "validate.details", errors=errors, warnings=warnings)
         return result
@@ -2299,18 +2354,23 @@ class DocGraphBackend:
         source_id: str | None = None,
         uri: str | None = None,
         max_sources: int = 20,
+        result_limit: int = 50,
+        detail: str = "compact",
     ) -> dict[str, Any]:
         started = time.perf_counter()
-        self._log("info", "stale_scan.start", auto_ingest=auto_ingest, source_id=source_id, uri=uri, max_sources=max_sources)
+        self._log("info", "stale_scan.start", auto_ingest=auto_ingest, source_id=source_id, uri=uri, max_sources=max_sources, result_limit=result_limit, detail=detail)
         if source_id and uri:
             raise ValueError("provide source_id or uri, not both")
+        if detail not in {"compact", "full"}:
+            raise ValueError("detail must be 'compact' or 'full'")
         max_sources = max(1, int(max_sources))
+        result_limit = max(1, int(result_limit))
         changed = []
         missing = []
         ingested = []
         file_types = cfg_list(self.config, "source_handling.file_backed_source_types")
         if not file_types:
-            result = {"changed": [], "missing": [], "auto_ingested": []}
+            result = {"changed": [], "missing": [], "auto_ingested": [], "changed_count": 0, "missing_count": 0, "auto_ingested_count": 0, "truncated": False}
             self._log("info", "stale_scan.done", changed_count=0, missing_count=0, auto_ingested_count=0, reason="no file-backed source types configured", elapsed_ms=(time.perf_counter() - started) * 1000)
             return result
         marks = ",".join("?" for _ in file_types)
@@ -2344,7 +2404,27 @@ class DocGraphBackend:
                             "rerun with source_id/uri filter or increase max_sources deliberately"
                         )
                     ingested.append(self.ingest_source(s["source_type"], uri, episode_type="snapshot", name=s["name"]))
-        result = {"changed": changed, "missing": missing, "auto_ingested": ingested}
+        if detail == "full":
+            visible_changed = changed
+            visible_missing = missing
+            visible_ingested = ingested
+        else:
+            visible_changed = changed[:result_limit]
+            visible_missing = missing[:result_limit]
+            visible_ingested = ingested[:result_limit]
+        result = {
+            "changed": visible_changed,
+            "missing": visible_missing,
+            "auto_ingested": visible_ingested,
+            "changed_count": len(changed),
+            "missing_count": len(missing),
+            "auto_ingested_count": len(ingested),
+            "truncated": detail != "full" and (
+                len(changed) > len(visible_changed)
+                or len(missing) > len(visible_missing)
+                or len(ingested) > len(visible_ingested)
+            ),
+        }
         self._log("info", "stale_scan.done", changed_count=len(changed), missing_count=len(missing), auto_ingested_count=len(ingested), elapsed_ms=(time.perf_counter() - started) * 1000)
         self._log(TRACE_LEVEL, "stale_scan.details", result=result)
         return result
