@@ -585,6 +585,10 @@ class DocGraphBackend:
         content: str | None = None,
         episode_type: str = "snapshot",
         name: str | None = None,
+        evidence_hint: str | None = None,
+        claim_text: str | None = None,
+        evidence_lines: list[dict[str, int]] | None = None,
+        recommend_limit: int = 5,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         has_inline_content = content is not None
@@ -640,6 +644,13 @@ class DocGraphBackend:
         existing = cur.execute("SELECT * FROM sources WHERE uri=?", (uri,)).fetchone()
         if existing and existing["current_hash"] == h:
             chunk_refs = self._chunk_refs_for_source(existing["source_id"])
+            recommended = self._recommend_evidence_candidates(
+                existing["source_id"],
+                evidence_hint=evidence_hint,
+                claim_text=claim_text,
+                evidence_lines=evidence_lines,
+                limit=recommend_limit,
+            )
             result = {
                 "status": "unchanged",
                 "source_id": existing["source_id"],
@@ -648,6 +659,8 @@ class DocGraphBackend:
                 "content_bytes": content_bytes,
                 "chunk_ids": [c["chunk_id"] for c in chunk_refs],
                 "chunk_refs": chunk_refs,
+                "recommended_evidence_candidates": recommended,
+                "recommendation_warning": self._evidence_recommendation_warning(recommended, evidence_hint, claim_text, evidence_lines),
                 "evidence_note": "Use these exact chunk_ids for claim evidence; do not infer chunk IDs from source_id or episode_id.",
             }
             self._log(
@@ -718,6 +731,13 @@ class DocGraphBackend:
                 chunk_count += 1
             review_update = self._mark_claims_without_active_support(old_chunk_ids)
         chunk_refs = self._chunk_refs_for_source(source_id)
+        recommended = self._recommend_evidence_candidates(
+            source_id,
+            evidence_hint=evidence_hint,
+            claim_text=claim_text,
+            evidence_lines=evidence_lines,
+            limit=recommend_limit,
+        )
         result = {
             "status": "ingested",
             "source_id": source_id,
@@ -727,6 +747,8 @@ class DocGraphBackend:
             "content_bytes": content_bytes,
             "chunk_ids": [c["chunk_id"] for c in chunk_refs],
             "chunk_refs": chunk_refs,
+            "recommended_evidence_candidates": recommended,
+            "recommendation_warning": self._evidence_recommendation_warning(recommended, evidence_hint, claim_text, evidence_lines),
             "evidence_note": "Use these exact chunk_ids for claim evidence; do not infer chunk IDs from source_id or episode_id.",
             "superseded_episode_id": supersedes_episode_id,
             "stale_chunk_ids": old_chunk_ids,
@@ -748,6 +770,139 @@ class DocGraphBackend:
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
         return result
+
+    def _evidence_recommendation_warning(
+        self,
+        candidates: list[dict[str, Any]],
+        evidence_hint: str | None,
+        claim_text: str | None,
+        evidence_lines: list[dict[str, int]] | None,
+    ) -> str | None:
+        if not (evidence_hint or claim_text or evidence_lines):
+            return None
+        if not candidates:
+            return "No evidence candidates matched the supplied hint/claim/lines. Do not guess chunk IDs; inspect chunk_refs or ingest a focused report."
+        return "Candidates are retrieval hints from this source only, not proof. Curator must attach only chunks that directly support the claim."
+
+    def _recommend_evidence_candidates(
+        self,
+        source_id: str,
+        *,
+        evidence_hint: str | None,
+        claim_text: str | None,
+        evidence_lines: list[dict[str, int]] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not (evidence_hint or claim_text or evidence_lines):
+            return []
+        limit = max(1, int(limit))
+        query_text = " ".join(part for part in (claim_text or "", evidence_hint or "") if part.strip())
+        query_terms = self._recommendation_terms(query_text)
+        line_ranges = self._normalize_evidence_lines(evidence_lines)
+        rows = self.conn.execute(
+            """
+            SELECT chunk_id, episode_id, locator, text
+            FROM chunks
+            WHERE source_id=? AND status='active'
+            ORDER BY rowid
+            """,
+            (source_id,),
+        ).fetchall()
+        scored: list[dict[str, Any]] = []
+        for row in rows:
+            locator = str(row["locator"])
+            text = str(row["text"])
+            chunk_range = self._locator_line_range(locator)
+            overlap_lines = self._line_overlap_count(chunk_range, line_ranges)
+            chunk_terms = self._recommendation_terms(text)
+            matched_terms = sorted(query_terms.intersection(chunk_terms))
+            lexical_score = float(len(matched_terms))
+            if query_terms:
+                lexical_score += sum(1.0 for term in matched_terms if len(term) >= 6)
+            if overlap_lines <= 0 and lexical_score <= 0:
+                continue
+            score = overlap_lines * 1000.0 + lexical_score
+            if overlap_lines > 0 and lexical_score > 0:
+                match_type = "line_overlap+text_match"
+            elif overlap_lines > 0:
+                match_type = "line_overlap"
+            else:
+                match_type = "text_match"
+            reason_parts = []
+            if overlap_lines:
+                reason_parts.append(f"overlaps requested evidence lines by {overlap_lines} line(s)")
+            if matched_terms:
+                reason_parts.append("matches terms: " + ", ".join(matched_terms[:8]))
+            preview = " ".join(text.split())
+            if len(preview) > 220:
+                preview = preview[:217] + "..."
+            scored.append(
+                {
+                    "chunk_id": row["chunk_id"],
+                    "episode_id": row["episode_id"],
+                    "locator": locator,
+                    "match_type": match_type,
+                    "score": round(score, 3),
+                    "matched_terms": matched_terms[:12],
+                    "preview": preview,
+                    "reason": "; ".join(reason_parts),
+                }
+            )
+        scored.sort(key=lambda item: (-float(item["score"]), str(item["locator"]), str(item["chunk_id"])))
+        return scored[:limit]
+
+    def _recommendation_terms(self, text: str) -> set[str]:
+        raw_terms = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+", text)
+        stop = {
+            "and",
+            "are",
+            "but",
+            "for",
+            "from",
+            "has",
+            "have",
+            "into",
+            "not",
+            "the",
+            "this",
+            "that",
+            "with",
+            "when",
+        }
+        return {term.lower() for term in raw_terms if len(term) >= 2 and term.lower() not in stop}
+
+    def _normalize_evidence_lines(self, evidence_lines: list[dict[str, int]] | None) -> list[tuple[int, int]]:
+        ranges: list[tuple[int, int]] = []
+        for item in evidence_lines or []:
+            try:
+                start = int(item.get("start", item.get("line", 0)))
+                end = int(item.get("end", start))
+            except Exception:
+                continue
+            if start <= 0 or end <= 0:
+                continue
+            if end < start:
+                start, end = end, start
+            ranges.append((start, end))
+        return ranges
+
+    def _locator_line_range(self, locator: str) -> tuple[int, int] | None:
+        m = re.search(r"lines\s+(\d+)-(\d+)", locator)
+        if not m:
+            return None
+        return int(m.group(1)), int(m.group(2))
+
+    def _line_overlap_count(self, chunk_range: tuple[int, int] | None, requested_ranges: list[tuple[int, int]]) -> int:
+        if not chunk_range or not requested_ranges:
+            return 0
+        start, end = chunk_range
+        total = 0
+        for req_start, req_end in requested_ranges:
+            overlap_start = max(start, req_start)
+            overlap_end = min(end, req_end)
+            if overlap_start <= overlap_end:
+                total += overlap_end - overlap_start + 1
+        return total
 
     def _chunk_refs_for_source(self, source_id: str, preview_chars: int = 180) -> list[dict[str, Any]]:
         rows = self.conn.execute(

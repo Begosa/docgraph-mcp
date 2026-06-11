@@ -11,14 +11,42 @@ tool = runtime.tool
 
 
 @tool
-def dg_ingest_source(source_type: str, uri: str, content: str | None = None, episode_type: str = "snapshot", name: str | None = None) -> dict[str, Any]:
-    """Ingest a source snapshot/event and return real chunk_refs for evidence links."""
-    return get_backend().ingest_source(source_type=source_type, uri=uri, content=content, episode_type=episode_type, name=name)
+def dg_ingest_source(
+    source_type: str,
+    uri: str,
+    content: str | None = None,
+    episode_type: str = "snapshot",
+    name: str | None = None,
+    evidence_hint: str | None = None,
+    claim_text: str | None = None,
+    evidence_lines: list[dict[str, int]] | None = None,
+    recommend_limit: int = 5,
+) -> dict[str, Any]:
+    """Ingest a source and optionally recommend supporting chunks from that source only."""
+    return get_backend().ingest_source(
+        source_type=source_type,
+        uri=uri,
+        content=content,
+        episode_type=episode_type,
+        name=name,
+        evidence_hint=evidence_hint,
+        claim_text=claim_text,
+        evidence_lines=evidence_lines,
+        recommend_limit=recommend_limit,
+    )
 
 
 @tool
-def dg_ingest_investigation_report(title: str, report: str, created_by: str = "specialist") -> dict[str, Any]:
-    """Ingest an agent/specialist investigation report as source->episode->chunks."""
+def dg_ingest_investigation_report(
+    title: str,
+    report: str,
+    created_by: str = "specialist",
+    evidence_hint: str | None = None,
+    claim_text: str | None = None,
+    evidence_lines: list[dict[str, int]] | None = None,
+    recommend_limit: int = 5,
+) -> dict[str, Any]:
+    """Ingest an agent/specialist investigation report and optionally recommend supporting chunks."""
     from .backend import sha256_text
 
     digest = sha256_text(f"{created_by}:{title}:{report}")[:16]
@@ -29,6 +57,10 @@ def dg_ingest_investigation_report(title: str, report: str, created_by: str = "s
         content=report,
         episode_type="agent_investigation",
         name=title,
+        evidence_hint=evidence_hint,
+        claim_text=claim_text,
+        evidence_lines=evidence_lines,
+        recommend_limit=recommend_limit,
     )
 
 

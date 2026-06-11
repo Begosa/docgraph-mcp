@@ -77,6 +77,8 @@ validate
 
 `docgraph_write_dg_ingest_source` returns `chunk_ids` and `chunk_refs`; curators must use those exact IDs for evidence and must not construct chunk IDs from source IDs, episode IDs, file paths, or counts.
 
+`docgraph_write_dg_ingest_source` and `docgraph_write_dg_ingest_investigation_report` can optionally take `evidence_hint`, `claim_text`, `evidence_lines`, and `recommend_limit`. When provided, the backend ranks only the active chunks from that same source and returns `recommended_evidence_candidates`. Line overlap is ranked before text matching. These candidates are hints, not proof; they never create `claim_evidence`, never search the whole graph, and must be confirmed by the curator before use in `dg_propose_update`.
+
 When re-ingesting a changed source, `docgraph_write_dg_ingest_source` also returns `stale_chunk_ids`, `affected_claim_ids`, and `claims_marked_needs_review`. Use these fields to start Flow 6 stale review directly instead of guessing which claims were invalidated.
 
 Before calling `docgraph_write_dg_ingest_source`, decide path-vs-inline ingestion. Repository-local stable files should use path ingestion: pass a repo-relative `uri` and omit `content`. Do not paste full repository file contents into the tool call; the backend reads and snapshots the file under `DOCGRAPH_ROOT`. External, temporary, or not-to-be-kept documents must use inline `content` with a stable non-file URI.

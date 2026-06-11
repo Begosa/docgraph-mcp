@@ -54,6 +54,8 @@ dg_render_docs
 dg_stale_scan
 ```
 
+`dg_ingest_source` and `dg_ingest_investigation_report` may include optional `evidence_hint`, `claim_text`, `evidence_lines`, and `recommend_limit` arguments. When supplied, the response includes `recommended_evidence_candidates` ranked only from chunks in that same source. Candidates are selection hints for the curator; they do not attach evidence or prove the claim.
+
 ## Install
 
 ```bash
